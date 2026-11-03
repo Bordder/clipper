@@ -6,3 +6,6 @@ __pycache__/
 .venv/
 venv/
 .claude/
+build/
+dist/
+release/

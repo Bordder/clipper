@@ -21,6 +21,12 @@ I wanted something like ShadowPlay that works on any GPU, doesn't eat frames in 
 
 ## Install
 
+Grab `BorddersClipper-Setup.exe` from the [latest release](https://github.com/Bordder/clipper/releases/latest) and run it. That's it, FFmpeg is included and no admin rights are needed.
+
+Windows might show a "Windows protected your PC" warning because the installer isn't code-signed. Click **More info** then **Run anyway**.
+
+### Running from source
+
 You need Windows 10/11, Python 3.10+ and [FFmpeg](https://ffmpeg.org/download.html) on your PATH.
 
 The quickest way to get FFmpeg:
@@ -79,6 +85,19 @@ Settings are stored in `%LOCALAPPDATA%\Clipper\settings.json`.
 
 Nothing leaves your PC. No telemetry, no network calls. The buffer, thumbnails and log live in `%LOCALAPPDATA%\Clipper`.
 
+## Building the installer
+
+Needs PyInstaller, [Inno Setup 6](https://jrsoftware.org/isinfo.php) and an FFmpeg shared build from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases) (`win64-gpl-shared`) unzipped somewhere:
+
+```
+pip install pyinstaller
+.\build.ps1 -FFmpegDir C:\path\to\ffmpeg-n8.1-latest-win64-gpl-shared-8.1
+```
+
+The installer ends up in `release\`.
+
 ## License
 
 [MIT](LICENSE) © Bordder
+
+The installer ships an unmodified FFmpeg build, which is GPL licensed. Its license is in the `ffmpeg` folder of the install, and the source is at [ffmpeg.org](https://ffmpeg.org/download.html) and [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds).

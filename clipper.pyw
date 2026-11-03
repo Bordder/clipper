@@ -43,6 +43,9 @@ except ImportError:
 warnings.filterwarnings("ignore")  # soundcard "data discontinuity" spam
 
 APP = "Clipper"
+VERSION = "1.0.0"
+FROZEN = getattr(sys, "frozen", False)  # running from the installed .exe
+APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).parent
 DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / APP
 BUFFER_DIR = DATA_DIR / "buffer"
 CONFIG_PATH = DATA_DIR / "settings.json"
@@ -94,6 +97,9 @@ PRESETS = {
 
 @functools.lru_cache(maxsize=None)
 def ffmpeg_bin(name="ffmpeg"):
+    bundled = APP_DIR / "ffmpeg" / f"{name}.exe"  # shipped with the installer
+    if bundled.exists():
+        return str(bundled)
     return shutil.which(name) or name
 
 
@@ -746,7 +752,7 @@ ORANGE = "#f0a020"
 GRAY = "#5b616b"
 
 SHOW_FLAG = DATA_DIR / "show.flag"
-ICON_PATH = Path(__file__).with_name("clipper.ico")
+ICON_PATH = Path(getattr(sys, "_MEIPASS", APP_DIR)) / "clipper.ico"
 APP_ID = "Clipper.InstantReplay"
 START_MENU = Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs"
 SHORTCUT = START_MENU / f"{NAME}.lnk"
@@ -2718,8 +2724,9 @@ class App:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
             if enabled:
                 pyw = Path(sys.executable).with_name("pythonw.exe")
-                winreg.SetValueEx(k, APP, 0, winreg.REG_SZ,
-                                  f'"{pyw}" "{Path(__file__).resolve()}" --tray')
+                cmd = (f'"{sys.executable}" --tray' if FROZEN
+                       else f'"{pyw}" "{Path(__file__).resolve()}" --tray')
+                winreg.SetValueEx(k, APP, 0, winreg.REG_SZ, cmd)
             else:
                 try:
                     winreg.DeleteValue(k, APP)
@@ -3028,8 +3035,9 @@ if __name__ == "__main__":
         if not hidden:
             SHOW_FLAG.touch()
         sys.exit(0)
-    try:
-        ensure_shortcut()
-    except Exception:
-        pass
+    if not FROZEN:  # the installer makes the shortcut for the .exe
+        try:
+            ensure_shortcut()
+        except Exception:
+            pass
     App(hidden=hidden).run()
