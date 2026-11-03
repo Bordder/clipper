@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.mp4
+*.ts
+*.log
+.venv/
+venv/
+.claude/

@@ -1,0 +1,6 @@
+numpy
+soundcard
+pystray
+pillow
+customtkinter
+pywin32
