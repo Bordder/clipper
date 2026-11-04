@@ -18,12 +18,23 @@ I wanted something like ShadowPlay that works on any GPU, doesn't eat frames in 
 - Clip library with thumbnails, filter by game, built-in player
 - Rename, delete (to Recycle Bin), open in your normal player
 - Lives in the tray, can start with Windows
+- Updates itself from GitHub releases
 
 ## Install
 
 Grab `BorddersClipper-Setup.exe` from the [latest release](https://github.com/Bordder/clipper/releases/latest) and run it. That's it, FFmpeg is included and no admin rights are needed.
 
 Windows might show a "Windows protected your PC" warning because the installer isn't code-signed. Click **More info** then **Run anyway**.
+
+### Updates
+
+Clipper checks this repo's latest release every few hours. When there's a newer one it downloads the installer in the background and checks it against the SHA-256 GitHub lists for it.
+
+- If Clipper starts in the tray (like when Windows boots) it installs the update quietly and comes back up.
+- Otherwise you get a tray notification, and you can install from the tray menu or **Settings → General → Updates**.
+- Both the check and the auto-install can be turned off there.
+
+If you're on 1.0.0, grab 1.1.0 by hand once, that's the first version with the updater.
 
 ### Running from source
 
@@ -60,7 +71,7 @@ Clips go to `Videos\Clips` by default, with a subfolder per game, e.g. `Clips\Ro
 
 ## Settings
 
-- **General:** clip length, hotkey, save folder, sort by game, sound on save, start with Windows, close to tray
+- **General:** clip length, hotkey, save folder, sort by game, sound on save, start with Windows, close to tray, updates
 - **Video:** monitor, FPS, resolution, encoder, H.264 / HEVC, preset, quality, cursor
 - **Audio:** desktop audio, mic and device, volumes, noise suppression, separate tracks, sync offset, bitrate
 
@@ -83,7 +94,7 @@ Settings are stored in `%LOCALAPPDATA%\Clipper\settings.json`.
 
 ## Privacy
 
-Nothing leaves your PC. No telemetry, no network calls. The buffer, thumbnails and log live in `%LOCALAPPDATA%\Clipper`.
+Your clips never leave your PC. No telemetry, no account. The only network call is the update check, a plain request to `api.github.com` for this repo's latest release (and the installer download from GitHub when there's a new one). Turn it off in Settings and Clipper never goes online. The buffer, thumbnails and log live in `%LOCALAPPDATA%\Clipper`.
 
 ## Building the installer
 

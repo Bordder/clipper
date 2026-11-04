@@ -1,7 +1,7 @@
 ; Inno Setup script. Build the exe first (see build.ps1), then: iscc installer.iss
 
 #define AppName "Bordders Clipper"
-#define AppVersion "1.0.0"
+#define AppVersion "1.1.0"
 #define AppExe "Clipper.exe"
 
 [Setup]
@@ -49,3 +49,4 @@ Filename: "{app}\{#AppExe}"; Description: "Start {#AppName}"; Flags: nowait post
 Type: filesandordirs; Name: "{localappdata}\Clipper\buffer"
 Type: filesandordirs; Name: "{localappdata}\Clipper\tmp"
 Type: filesandordirs; Name: "{localappdata}\Clipper\thumbs"
+Type: filesandordirs; Name: "{localappdata}\Clipper\updates"

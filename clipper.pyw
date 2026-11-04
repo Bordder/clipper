@@ -43,7 +43,7 @@ except ImportError:
 warnings.filterwarnings("ignore")  # soundcard "data discontinuity" spam
 
 APP = "Clipper"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 FROZEN = getattr(sys, "frozen", False)  # running from the installed .exe
 APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).parent
 DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / APP
@@ -82,6 +82,8 @@ DEFAULTS = {
     "separate_tracks": False,
     "audio_offset_ms": 0,
     "audio_bitrate": 160,
+    "check_updates": True,
+    "auto_update": True,
 }
 
 RESOLUTIONS = {"native": None, "1440p": 1440, "1080p": 1080, "720p": 720, "480p": 480}
@@ -716,6 +718,80 @@ class Playback:
                 pass
 
 
+# ---------------------------------------------------------------- updates
+
+REPO = "Bordder/clipper"
+RELEASES_URL = f"https://github.com/{REPO}/releases/latest"
+UPDATE_API = f"https://api.github.com/repos/{REPO}/releases/latest"
+UPDATE_DIR = DATA_DIR / "updates"
+SETUP_ASSET = "BorddersClipper-Setup.exe"
+CHECK_EVERY = 6 * 3600
+
+
+def parse_version(text):
+    nums = re.findall(r"\d+", text or "")
+    return tuple(int(n) for n in nums[:3]) if nums else (0,)
+
+
+def latest_release():
+    """Newest release on GitHub as (version, asset dict or None, page url), or None."""
+    import urllib.request
+    req = urllib.request.Request(UPDATE_API, headers={
+        "Accept": "application/vnd.github+json", "User-Agent": f"BorddersClipper/{VERSION}"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        data = json.loads(r.read().decode("utf-8"))
+    if data.get("draft") or data.get("prerelease"):
+        return None
+    tag = data.get("tag_name", "")
+    asset = next((a for a in data.get("assets", []) if a.get("name") == SETUP_ASSET), None)
+    return tag.lstrip("v"), asset, data.get("html_url") or RELEASES_URL
+
+
+def download_update(version, asset):
+    """Download the installer and check it against the size and sha256 GitHub reports."""
+    import urllib.request
+    url = asset.get("browser_download_url", "")
+    if not url.startswith(f"https://github.com/{REPO}/releases/download/"):
+        raise ValueError("unexpected download url")
+    digest = (asset.get("digest") or "").lower()
+    want = digest[7:] if digest.startswith("sha256:") else None
+    UPDATE_DIR.mkdir(parents=True, exist_ok=True)
+    out = UPDATE_DIR / f"BorddersClipper-Setup-{version}.exe"
+    part = out.with_suffix(".part")
+    h = hashlib.sha256()
+    req = urllib.request.Request(url, headers={"User-Agent": f"BorddersClipper/{VERSION}"})
+    with urllib.request.urlopen(req, timeout=30) as r, open(part, "wb") as f:
+        while chunk := r.read(1 << 20):
+            h.update(chunk)
+            f.write(chunk)
+    if part.stat().st_size != asset.get("size") or (want and h.hexdigest() != want):
+        part.unlink(missing_ok=True)
+        raise ValueError("download did not match the release")
+    part.replace(out)
+    return out
+
+
+def run_installer(setup, relaunch_args):
+    """Wait for this process to exit, install silently, then start the new version."""
+    import base64
+    exe = APP_DIR / "Clipper.exe"
+    q = lambda p: "'" + str(p).replace("'", "''") + "'"
+    args = f" -ArgumentList {', '.join(q(a) for a in relaunch_args)}" if relaunch_args else ""
+    script = (f"Wait-Process -Id {os.getpid()} -ErrorAction SilentlyContinue; "
+              f"Start-Process -Wait -FilePath {q(setup)} -ArgumentList "
+              f"'/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART'; "
+              f"Remove-Item -LiteralPath {q(setup)} -ErrorAction SilentlyContinue; "
+              f"Start-Process -FilePath {q(exe)}{args}")
+    enc = base64.b64encode(script.encode("utf-16-le")).decode()
+    cmd = ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-EncodedCommand", enc]
+    # not DETACHED_PROCESS: powershell quits at once without a console
+    flags = NO_WINDOW | 0x00000200  # CREATE_NEW_PROCESS_GROUP
+    try:  # outlive us even if whatever launched us put us in a kill-on-close job
+        subprocess.Popen(cmd, creationflags=flags | 0x01000000)  # CREATE_BREAKAWAY_FROM_JOB
+    except OSError:
+        subprocess.Popen(cmd, creationflags=flags)
+
+
 # ---------------------------------------------------------------- GUI
 
 import hashlib
@@ -1087,6 +1163,12 @@ class App:
         self._play_job = None
         self._play_resize_job = None
         self._dragging = False
+        # updates
+        self.update_info = None     # newer release found: {"version", "setup", "url"}
+        self.update_text = f"Version {VERSION}"
+        self._checking = False
+        self._checked_once = False
+        self._notified = None
 
         self.build_fonts()
         self.placeholder = self.make_placeholder()
@@ -1107,6 +1189,7 @@ class App:
         self.root.after(100, self.pump)
         self.root.after(200, lambda: self.start_buffer(quiet=True))
         self.root.after(700, self.animate)
+        self.root.after(15000, self.auto_check)
         if not (hidden or self.cfg["start_minimized"]):
             self.root.after(600, self.ensure_settings)
 
@@ -2268,6 +2351,18 @@ class App:
         self.f_switch(g, "start_with_windows", "Start with Windows", desc="Starts hidden in the tray")
         self.f_switch(g, "close_to_tray", "Close button hides to tray", desc="Keeps recording in the background")
         self.end_group(g)
+        g = self.section(gen, "Updates")
+        self.f_switch(g, "check_updates", "Check for updates", desc="Asks GitHub every few hours")
+        if FROZEN:
+            self.f_switch(g, "auto_update", "Install updates automatically",
+                          desc="Installs when Clipper starts in the tray")
+        r = self.row(g, NAME, desc=self.update_text)
+        self.upd_desc = r.desc
+        self.upd_btn = self.btn(r, "ghost", "Check now", width=128, height=32, border_color=LINE_HI,
+                                command=self.update_button)
+        self.upd_btn.pack(side="right", padx=(0, 4))
+        self.paint_update()
+        self.end_group(g)
 
         mons = list_monitors()
         labels = [f"{i}: {w}x{h}{' primary' if p else ''}" for i, (_, _, w, h, p) in enumerate(mons)] or ["0"]
@@ -2470,7 +2565,8 @@ class App:
             left.pack(side="left", padx=(4, 16))
             r.label = self.label(left, label, "body", TEXT, 20)
             r.label.pack(fill="x")
-            self.label(left, elide(desc, self.F["small"], 320), "small", MUTED, 16).pack(fill="x")
+            r.desc = self.label(left, elide(desc, self.F["small"], 320), "small", MUTED, 16)
+            r.desc.pack(fill="x")
         else:
             r.label = self.label(r, label, "body", TEXT, 20)
             r.label.pack(side="left", padx=(4, 16))
@@ -2932,6 +3028,11 @@ class App:
                         self.starting = False
                     self.set_status("Error", GRAY, (data.splitlines() or [""])[0][:120])
                     self.alert("showerror", data)
+                elif kind == "update":
+                    self.on_update(data)
+                elif kind == "install_update":
+                    self.install_update()
+                    return
                 elif kind == "show":
                     self.show_window()
                 elif kind == "toggle":
@@ -2957,6 +3058,99 @@ class App:
         if self.ticks % 12 == 0 and self.visible() and self.current == "Clips":
             self.refresh_clips()  # pick up clips added outside the app
 
+    # ================================================================ updates
+    def auto_check(self):
+        if self._quitting:
+            return
+        if self.cfg["check_updates"]:
+            self.check_updates()
+        self.root.after(CHECK_EVERY * 1000, self.auto_check)
+
+    def check_updates(self, manual=False):
+        if self._checking:
+            return
+        self._checking = True
+        first, self._checked_once = not self._checked_once, True
+        if manual:
+            self.update_text = "Checking..."
+            self.paint_update()
+
+        def work():
+            d = {"state": "none", "manual": manual, "first": first}
+            try:
+                for f in UPDATE_DIR.glob("BorddersClipper-Setup-*"):  # old or half-done downloads
+                    if f.suffix != ".exe" or parse_version(f.stem) <= parse_version(VERSION):
+                        f.unlink(missing_ok=True)
+                rel = latest_release()
+                if rel and parse_version(rel[0]) > parse_version(VERSION):
+                    version, asset, url = rel
+                    d.update(state="available", version=version, url=url, setup=None)
+                    if FROZEN and asset:
+                        done = UPDATE_DIR / f"BorddersClipper-Setup-{version}.exe"
+                        d["setup"] = done if done.exists() else download_update(version, asset)
+            except Exception as e:
+                d.update(state="error", error=str(e))
+            self.events.put(("update", d))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def on_update(self, d):
+        self._checking = False
+        if d["state"] == "error":
+            self.update_text = "Couldn't reach GitHub" if d["manual"] else self.update_text
+        elif d["state"] == "none":
+            self.update_info = None
+            self.update_text = f"Version {VERSION}, up to date"
+        else:
+            self.update_info = d
+            v = d["version"]
+            self.update_text = f"Version {v} is ready to install" if d["setup"] else f"Version {v} is out"
+            # started in the tray (boot, or after an update): safe to swap now, the buffer is fresh
+            if (d["setup"] and d["first"] and self.cfg["auto_update"] and not d["manual"]
+                    and not self.visible()):
+                self.install_update()
+                return
+            if self.tray and self._notified != v and not d["manual"]:
+                self._notified = v
+                try:
+                    self.tray.notify(f"{NAME} {v} is available. Install it from the tray menu "
+                                     "or Settings.", NAME)
+                except Exception:
+                    pass
+        self.paint_update()
+        if self.tray:
+            self.tray.update_menu()
+
+    def paint_update(self):
+        if not getattr(self, "upd_desc", None) or not self.upd_desc.winfo_exists():
+            return
+        self.upd_desc.configure(text=self.update_text)
+        if self.update_info:
+            self.upd_btn.configure(text="Install update" if self.update_info["setup"] else "Download")
+        else:
+            self.upd_btn.configure(text="Check now")
+
+    def update_button(self):
+        if self.update_info:
+            self.install_update()
+        else:
+            self.check_updates(manual=True)
+
+    def install_update(self):
+        info = self.update_info
+        if not info:
+            return
+        if not info["setup"]:  # running from source, or no installer on the release
+            import webbrowser
+            webbrowser.open(info["url"])
+            return
+        try:
+            run_installer(info["setup"], [] if self.visible() else ["--tray"])
+        except Exception as e:
+            self.alert("showerror", f"Couldn't start the update:\n{e}")
+            return
+        self.quit()
+
     # ================================================================ tray
     def start_tray(self):
         if pystray is None:
@@ -2968,6 +3162,10 @@ class App:
             pystray.MenuItem("Save clip now", lambda: self.trigger_save()),
             pystray.MenuItem(lambda item: "Pause recording" if self.rec.running() else "Resume recording",
                              lambda: put(("toggle", None))),
+            pystray.MenuItem(lambda item: f"Install update {self.update_info['version']}"
+                             if self.update_info else "Install update",
+                             lambda: put(("install_update", None)),
+                             visible=lambda item: self.update_info is not None),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", lambda: put(("quit", None))),
         )
